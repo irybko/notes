@@ -1,0 +1,103 @@
+It is the note about some errors, which I met during attempts to create trigger code text dynamically.
+I thought that it would be possible to create trigger code text template and then interpollates it with concrete variables values.
+Unfortunatelly it wouldn`t and I waste my time for several unsuccess attempts to do it. 
+To execute all attempts I used MariaDB 10.4 database server.
+I have no idea how to avoid these database constraints.
+=========================================================================
+Attempt number 1
+=========================================================================
+DELIMITER $$
+set GLOBAL log_bin_trust_function_creators = 1;
+/* fragment */
+drop procedure if exists createtrigger;
+create procedure createtrigger(in rname varchar(30),in evnt varchar(6),in sqlcmnd varchar(6))
+begin
+      declare code varchar(255);
+      declare tmpl varchar(125)
+		  default 'create or replace trigger rname_event_sqlcmnd event sqlcmnd on rname for each row call operationlog("rname","sqlcmnd");';
+		  #
+		  set code = replace(tmpl, 'event', evnt);
+		  set code = replace(code, 'rname', rname);
+		  set code = replace(code, 'sqlcmnd',sqlcmnd);
+		  select code;
+      execute immediate code;
+end;
+$$
+DELIMITER ;
+/* the place of database code where call procedure is situated */
+call createtrigger("providers", "after", "insert");
+I got error:  ERROR 1295 (HY000) at line 193 in file: 'db/payments.sql': This command is not supported in the prepared statement protocol yet
+===================================================================================
+Attempt number 2
+===================================================================================
+DELIMITER $$
+set GLOBAL log_bin_trust_function_creators = 1;
+/**/
+drop procedure if exists createtrigger;
+create procedure createtrigger(in rname varchar(30),in evnt varchar(6),in sqlcmnd varchar(6))
+begin
+      declare code varchar(255);
+      declare tmpl varchar(125) default 'create or replace trigger rname_event_sqlcmnd event sqlcmnd on rname for each row call operationlog("rname","sqlcmnd");';
+      #
+      set code = replace(tmpl, 'event', evnt);
+      set code = replace(code, 'rname', rname);
+      set code = replace(code, 'sqlcmnd',sqlcmnd);
+      #
+      select code;
+      prepare stmt from code;
+      execute stmt;
+      deallocate prepare stmt;
+end;
+$$
+DELIMITER ;
+/**/
+call createtrigger("providers", "after", "insert");
+I got error: ERROR 1295 (HY000) at line 193 in file: 'db/payments.sql': This command is not supported in the prepared statement protocol yet
+===================================================================================
+Attempt number 3
+===================================================================================
+create or replace table dynamicsqlcodes(id int not null auto_increment,codename varchar(30) not null,codetext varchar(255) not null,primary key(id)) engine=memory default character set 'utf8';
+DELIMITER $$
+set GLOBAL log_bin_trust_function_creators = 1;
+/**/
+drop procedure if exists createtrigger;
+create procedure createtrigger(in rname varchar(30),in evnt varchar(6),in sqlcmnd varchar(6))
+begin
+      declare code varchar(255);
+      declare tmpl varchar(125) default 'create or replace trigger rname_event_sqlcmnd event sqlcmnd on rname for each row call operationlog("rname","sqlcmnd");';
+      #
+      set code = replace(tmpl, 'event', evnt);
+      set code = replace(code, 'rname', rname);
+      set code = replace(code, 'sqlcmnd',sqlcmnd);
+      select code;
+      insert into dynamicsqlcodes(codename, codetext) values(rname, code);
+end;
+drop procedure if exists applycode;
+create procedure applycode(in name varchar(30))
+begin
+      set @pathname = replace('/tmp/rname_triggers','rname',codename);
+      set @content = (select codetext from dynamicsqlcodes where codename = name);
+      select @content into outfile @pathname;
+      source @pathname;
+end;
+$$DELIMITER ;
+call createtrigger("providers", "after", "insert");
+call applycode("providers");
+
+I got error: ERROR 1064 (42000) at line 78 in file: 'db/payments.sql': 
+You have an error in your SQL syntax; 
+check the manual that corresponds to your MariaDB server version for the right syntax to use near '@pathname; source @pathname; end' at line 5
+===================================================================================
+Attempt number 4
+===================================================================================
+And another definition of applycode stored procedure:
+drop procedure if exists applycode;
+create procedure applycode()
+begin
+      select (select codetext from dynamicsqlcodes)
+      into outfile /tmp/alltriggers.sql;
+      source /tmp/alltriggers.sql;
+end;
+I got error: ERROR 1064 (42000) at line 78 in file: 'db.sql': 
+You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '/tmp/alltriggers.sql;
+source /tmp/alltriggers.sql;
